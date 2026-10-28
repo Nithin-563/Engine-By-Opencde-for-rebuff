@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: deoid-engine
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: ENGINE_TOKEN
+        generateValue: true
+      - key: WORKSPACE_ROOT
+        value: /data/workspaces
+      - key: CORS_ORIGIN
+        sync: false
+      - key: MAX_STEPS
+        value: "12"
