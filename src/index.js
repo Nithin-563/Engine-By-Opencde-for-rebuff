@@ -442,7 +442,7 @@ async function servePreview(req, res) {
   }
   const { data: project } = await store
     .db()
-    .from("projects")
+    .from("guffy_projects")
     .select("id,name,entry_file,framework")
     .eq("id", projectId)
     .maybeSingle();

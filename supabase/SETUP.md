@@ -17,8 +17,8 @@ You need one Supabase project. It takes about six minutes.
 2. Open [`migrations/0001_guffy_init.sql`](migrations/0001_guffy_init.sql) from
    this folder, copy the whole file, paste it in, press **Run** (⌘/Ctrl + Enter).
 3. You should see `Success. No rows returned`.
-4. Open **Table Editor**. You should now see `profiles`, `projects`,
-   `messages`, `runs`, `project_files`, `provider_keys`, `deployments`.
+4. Open **Table Editor**. You should now see `guffy_profiles`, `guffy_projects`,
+   `guffy_messages`, `guffy_runs`, `guffy_project_files`, `guffy_provider_keys`, `guffy_deployments`.
 
 The migration is idempotent — running it twice is harmless.
 
@@ -61,7 +61,7 @@ If you test on a Netlify deploy preview URL, add that origin too.
 
 - Every table is owner-scoped. A signed-in user can only read and write rows
   whose `user_id` (or parent project's `user_id`) is their own.
-- `provider_keys` has **no** policy for `anon` or `authenticated`, so it is
+- `guffy_provider_keys` has **no** policy for `anon` or `authenticated`, so it is
   unreadable from a browser even with a valid session. Only the engine's
   service-role client touches it, and values are AES-256-GCM encrypted with
   `APP_SECRET` before insert.

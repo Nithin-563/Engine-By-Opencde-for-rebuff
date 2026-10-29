@@ -45,11 +45,11 @@ export function open(blob) {
 /* ------------------------------------------------------------------ profile */
 
 export async function getProfile(userId) {
-  const { data, error } = await db().from("profiles").select("*").eq("id", userId).maybeSingle();
+  const { data, error } = await db().from("guffy_profiles").select("*").eq("id", userId).maybeSingle();
   if (error) throw error;
   if (data) return data;
   const { data: created, error: insErr } = await db()
-    .from("profiles")
+    .from("guffy_profiles")
     .insert({ id: userId })
     .select("*")
     .single();
@@ -75,7 +75,7 @@ const projectColumns = "id,user_id,name,framework,entry_file,created_at,updated_
 
 export async function listProjects(userId) {
   const { data, error } = await db()
-    .from("projects")
+    .from("guffy_projects")
     .select(projectColumns)
     .eq("user_id", userId)
     .order("updated_at", { ascending: false });
@@ -85,7 +85,7 @@ export async function listProjects(userId) {
 
 export async function getProject(userId, projectId) {
   const { data, error } = await db()
-    .from("projects")
+    .from("guffy_projects")
     .select(projectColumns)
     .eq("id", projectId)
     .eq("user_id", userId)
@@ -126,7 +126,7 @@ const STARTER_PAGE = `<!doctype html>
 
 export async function createProject(userId, { name, framework = "static" } = {}) {
   const { data, error } = await db()
-    .from("projects")
+    .from("guffy_projects")
     .insert({ user_id: userId, name: name?.trim() || "Untitled project", framework })
     .select(projectColumns)
     .single();
@@ -136,12 +136,12 @@ export async function createProject(userId, { name, framework = "static" } = {})
 }
 
 export async function touchProject(projectId) {
-  await db().from("projects").update({ updated_at: new Date().toISOString() }).eq("id", projectId);
+  await db().from("guffy_projects").update({ updated_at: new Date().toISOString() }).eq("id", projectId);
 }
 
 export async function renameProject(userId, projectId, name) {
   const { error } = await db()
-    .from("projects")
+    .from("guffy_projects")
     .update({ name, updated_at: new Date().toISOString() })
     .eq("id", projectId)
     .eq("user_id", userId);
@@ -149,7 +149,7 @@ export async function renameProject(userId, projectId, name) {
 }
 
 export async function deleteProject(userId, projectId) {
-  const { error } = await db().from("projects").delete().eq("id", projectId).eq("user_id", userId);
+  const { error } = await db().from("guffy_projects").delete().eq("id", projectId).eq("user_id", userId);
   if (error) throw error;
 }
 
@@ -157,7 +157,7 @@ export async function deleteProject(userId, projectId) {
 
 export async function listMessages(projectId, limit = 200) {
   const { data, error } = await db()
-    .from("messages")
+    .from("guffy_messages")
     .select("id,role,content,metadata,created_at")
     .eq("project_id", projectId)
     .order("created_at", { ascending: true })
@@ -168,7 +168,7 @@ export async function listMessages(projectId, limit = 200) {
 
 export async function addMessage(projectId, userId, role, content, metadata = {}) {
   const { data, error } = await db()
-    .from("messages")
+    .from("guffy_messages")
     .insert({ project_id: projectId, user_id: userId, role, content, metadata })
     .select("id,role,content,metadata,created_at")
     .single();
@@ -180,7 +180,7 @@ export async function addMessage(projectId, userId, role, content, metadata = {}
 
 export async function startRun(projectId, userId, provider, model) {
   const { data, error } = await db()
-    .from("runs")
+    .from("guffy_runs")
     .insert({ project_id: projectId, user_id: userId, provider, model, status: "running" })
     .select("id")
     .single();
@@ -190,7 +190,7 @@ export async function startRun(projectId, userId, provider, model) {
 
 export async function finishRun(id, { status, promptTokens, completionTokens, durationMs, toolTrace, error, messageId }) {
   await db()
-    .from("runs")
+    .from("guffy_runs")
     .update({
       status,
       prompt_tokens: promptTokens ?? null,
@@ -207,7 +207,7 @@ export async function finishRun(id, { status, promptTokens, completionTokens, du
 
 export async function listFiles(projectId) {
   const { data, error } = await db()
-    .from("project_files")
+    .from("guffy_project_files")
     .select("path,content,size,updated_at")
     .eq("project_id", projectId)
     .order("path", { ascending: true });
@@ -217,7 +217,7 @@ export async function listFiles(projectId) {
 
 export async function getFile(projectId, filePath) {
   const { data, error } = await db()
-    .from("project_files")
+    .from("guffy_project_files")
     .select("path,content,size,updated_at")
     .eq("project_id", projectId)
     .eq("path", filePath)
@@ -227,7 +227,7 @@ export async function getFile(projectId, filePath) {
 }
 
 export async function putFile(projectId, filePath, content) {
-  const { error } = await db().from("project_files").upsert(
+  const { error } = await db().from("guffy_project_files").upsert(
     {
       project_id: projectId,
       path: filePath,
@@ -242,21 +242,21 @@ export async function putFile(projectId, filePath, content) {
 }
 
 export async function removeFile(projectId, filePath) {
-  const { error } = await db().from("project_files").delete().eq("project_id", projectId).eq("path", filePath);
+  const { error } = await db().from("guffy_project_files").delete().eq("project_id", projectId).eq("path", filePath);
   if (error) throw error;
 }
 
 /* ------------------------------------------------------------- provider keys */
 
 export async function listKeyHints(userId) {
-  const { data, error } = await db().from("provider_keys").select("provider,hint,updated_at").eq("user_id", userId);
+  const { data, error } = await db().from("guffy_provider_keys").select("provider,hint,updated_at").eq("user_id", userId);
   if (error) throw error;
   return data ?? [];
 }
 
 export async function getKey(userId, provider) {
   const { data, error } = await db()
-    .from("provider_keys")
+    .from("guffy_provider_keys")
     .select("ciphertext")
     .eq("user_id", userId)
     .eq("provider", provider)
@@ -274,7 +274,7 @@ export async function getKey(userId, provider) {
 export async function setKey(userId, provider, payload) {
   const { apiKey, baseUrl } = payload;
   const hint = `…${String(apiKey).slice(-4)}`;
-  const { error } = await db().from("provider_keys").upsert(
+  const { error } = await db().from("guffy_provider_keys").upsert(
     {
       user_id: userId,
       provider,
@@ -288,25 +288,25 @@ export async function setKey(userId, provider, payload) {
 }
 
 export async function deleteKey(userId, provider) {
-  const { error } = await db().from("provider_keys").delete().eq("user_id", userId).eq("provider", provider);
+  const { error } = await db().from("guffy_provider_keys").delete().eq("user_id", userId).eq("provider", provider);
   if (error) throw error;
 }
 
 /* -------------------------------------------------------------- deployments */
 
 export async function recordDeployment(row) {
-  const { data, error } = await db().from("deployments").insert(row).select("id").single();
+  const { data, error } = await db().from("guffy_deployments").insert(row).select("id").single();
   if (error) throw error;
   return data.id;
 }
 
 export async function updateDeployment(id, patch) {
-  await db().from("deployments").update(patch).eq("id", id);
+  await db().from("guffy_deployments").update(patch).eq("id", id);
 }
 
 export async function listDeployments(projectId) {
   const { data, error } = await db()
-    .from("deployments")
+    .from("guffy_deployments")
     .select("id,target,url,status,error,created_at")
     .eq("project_id", projectId)
     .order("created_at", { ascending: false })

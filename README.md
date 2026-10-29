@@ -76,7 +76,7 @@ All `/api/*` routes require `Authorization: Bearer <supabase access token>`.
 
 Supabase is the source of truth. `ensureWorkspace()` materialises a project into
 `DATA_DIR/<projectId>/` on first touch and marks it with `.guffy-synced`; every
-tool write goes to disk *and* `project_files`. A Render restart therefore loses
+tool write goes to disk *and* `guffy_project_files`. A Render restart therefore loses
 nothing — the next request rebuilds the directory.
 
 ## Security notes
