@@ -1,150 +1,110 @@
-# Deoid engine
+# guffy-engine
 
-The compute half of Deoid. This is a small container that gives the agent what
-Netlify cannot: a persistent workspace, a shell, file tools and a streaming
-tool-loop. Deploy it once to Render, Railway or Fly, then paste its URL into
-**Deoid → Settings → Agent engine**.
-
-```
-Deoid web app (Netlify)  ──HTTPS/SSE──▶  deoid-engine (Railway)
-        │                                     │
-   Supabase (auth, threads)              workspace + shell + tools
-        │                                     │
-        └────────── model API (BYOK) ◀────────┘
-```
-
-## Deploy to Render (free tier)
-
-1. Unzip `deoid-engine.zip` and push it to a GitHub repo.
-2. Render → **New → Web Service** → connect the repo.
-3. Language: **Docker**. Render finds the `Dockerfile` automatically.
-4. Add the environment variable **`ENGINE_TOKEN`** — this is the one that is
-   missing if you see `ENGINE_TOKEN is required` and `Exited with status 1`.
-   Use Render's **Generate** button or `openssl rand -hex 32`.
-5. Add `CORS_ORIGIN=https://your-deoid-site.netlify.app`.
-6. Deploy. Wait for **Live**, then open
-   `https://YOUR-SERVICE.onrender.com/health` once to wake it.
-7. Copy the URL and the token into **Deoid → Settings → Agent engine**.
-
-Free-tier notes: the service spins down after ~15 minutes of inactivity, the
-first request then takes 30–60s, and the container disk is ephemeral (workspaces
-reset on restart). Open `/health` before connecting, and expect the first Builder
-run after a sleep to be slow. For always-on behaviour use Railway/Fly or a paid
-Render instance.
-
-Alternatively, commit `render.yaml` and use **New → Blueprint** — it creates the
-service and generates `ENGINE_TOKEN` for you. Copy the token from the dashboard
-after the first deploy.
-
-## Deploy to Railway (5 minutes)
-
-1. Unzip `deoid-engine.zip`.
-2. Push it to a GitHub repo (private is fine):
-   ```bash
-   cd deoid-engine
-   git init && git add . && git commit -m "Deoid engine"
-   gh repo create deoid-engine --private --source=. --push
-   ```
-3. Railway → **New Project → Deploy from GitHub repo** → pick the repo.
-   Railway detects the `Dockerfile` automatically.
-4. Add variables:
-   - `ENGINE_TOKEN` — `openssl rand -hex 32` (required)
-   - `CORS_ORIGIN` — your site origin, e.g. `https://deoid.netlify.app`
-   - optional: `MODEL_API_KEY` (house key), `MAX_STEPS`, `RUN_TIMEOUT_MS`
-5. **Settings → Networking → Generate Domain.** Copy it, e.g.
-   `https://deoid-engine-production.up.railway.app`.
-6. (Recommended) **Add a volume** mounted at `/data`. Without it, workspaces
-   disappear on every deploy. With it, threads keep their files.
-7. Open Deoid → Settings → Agent engine, paste the URL and `ENGINE_TOKEN`.
-   Deoid calls `GET /health` before saving, so a typo is rejected immediately.
-
-Builder and Cowork then run on the engine. Chat stays on the direct model path.
-If the engine is unreachable, Deoid falls back to the direct model and tells you
-in the thread.
-
-## API
-
-All `/v1/*` routes require `Authorization: Bearer $ENGINE_TOKEN`.
-
-| Method | Path | Purpose |
-|---|---|---|
-| GET | `/health` | version, tools, uptime |
-| POST | `/v1/run` | run the agent, returns SSE |
-| GET | `/v1/files?sessionId=` | list a workspace |
-| POST | `/v1/reset` | delete a workspace (`{ sessionId }`) |
-
-`POST /v1/run` body:
-
-```json
-{
-  "threadId": "uuid",
-  "surface": "builder",
-  "provider": "openai",
-  "model": "gpt-4.1-mini",
-  "apiKey": "sk-...",
-  "baseUrl": null,
-  "messages": [{ "role": "user", "content": "build a habit tracker" }]
-}
-```
-
-Stream events: `meta`, `status`, `tool`, `delta`, `done`, `error`.
-
-## Tools
-
-`write_file`, `read_file`, `list_files`, `delete_file`, `run_command`,
-`fetch_url`.
-
-Safety boundaries:
-
-- Every session is a directory under `WORKSPACE_ROOT`; path traversal is rejected.
-- `run_command` uses a sanitised environment — model keys and tokens are never
-  passed to the shell — with a 60s hard timeout and output cap.
-- Obvious destructive patterns (`rm -rf /`, `mkfs`, `shutdown`, fork bombs) are
-  blocked.
-- `fetch_url` refuses localhost, private ranges and cloud metadata addresses.
-- Tool output is capped so a chatty command cannot blow up the context.
-
-This is a single-tenant-per-user runner: every request carries the user's own
-model key, and nothing is stored on the engine except workspace files. If you
-run one engine for many users, set `CORS_ORIGIN` and give each Deoid deployment
-its own token.
-
-## Local test
+Node service that does the actual work: provider routing, the agent tool loop,
+workspace files, a shell, signed previews and Netlify deploys.
 
 ```bash
-cd deoid-engine
-ENGINE_TOKEN=dev-token PORT=8787 WORKSPACE_ROOT=/tmp/deoid-ws node src/server.js
-curl -s http://localhost:8787/health
-curl -s -H "authorization: Bearer dev-token" http://localhost:8787/health
+cp .env.example .env
+node --env-file=.env src/index.js     # http://localhost:8080
 ```
 
-No dependencies, no build step. Node 20+ only.
+`GET /health` reports `configured` and the exact missing variables. It will boot
+in degraded mode (health + catalog only) rather than crash.
 
-Run the smoke test to check the whole contract without any API key:
+## Environment
 
-```bash
-npm test
+| Variable | Required | Notes |
+| --- | --- | --- |
+| `SUPABASE_URL` | yes | project URL |
+| `SUPABASE_ANON_KEY` | yes | used only to verify bearer tokens |
+| `SUPABASE_SERVICE_ROLE_KEY` | yes | **secret** — bypasses RLS |
+| `APP_SECRET` | yes | 24+ chars; seals BYOK keys and signs preview URLs |
+| `OPENROUTER_API_KEY` | optional | managed models |
+| `KILO_API_KEY` | optional | managed models |
+| `WEB_ORIGIN` | yes in prod | exact origin(s), comma-separated; `*` allows all |
+| `PUBLIC_URL` | yes in prod | used to build preview URLs |
+| `DATA_DIR` | no | default `./.data/workspaces` |
+| `ALLOW_SHELL` | no | default `true`; `false` disables shell + terminal |
+| `SHELL_TIMEOUT_MS` | no | default 45000, max 120000 |
+| `MAX_AGENT_STEPS` | no | default 14 |
+| `NETLIFY_AUTH_TOKEN` / `NETLIFY_SITE_ID` | no | lets users deploy without pasting a token |
+
+## Routes
+
+```
+GET    /health
+GET    /api/providers
+GET    /api/models?provider=&baseUrl=
+GET    /api/me
+PUT    /api/keys/:provider          { apiKey, baseUrl? }
+DELETE /api/keys/:provider
+GET    /api/projects
+POST   /api/projects                { name, framework? }
+PATCH  /api/projects/:id            { name }
+DELETE /api/projects/:id
+GET    /api/projects/:id/messages
+GET    /api/projects/:id/files?content=1
+GET    /api/projects/:id/file?path=
+PUT    /api/projects/:id/file       { path, content }
+DELETE /api/projects/:id/file?path=
+GET    /api/projects/:id/workspace
+POST   /api/projects/:id/chat       SSE agent stream
+GET    /api/projects/:id/preview-url
+GET    /api/projects/:id/deployments
+POST   /api/projects/:id/deploy     { token?, siteId? }
+WS     /ws/terminal?projectId=&token=
+GET    /preview/:projectId/:signature/*
 ```
 
-It boots a fake provider and the engine, then asserts: health, auth, SSE
-`done`, a single `Bearer` header after a pasted `Bearer ` prefix, OpenRouter
-attribution, pre-stream rejection of an empty key, and the `max_tokens` →
-`max_completion_tokens` retry.
+All `/api/*` routes require `Authorization: Bearer <supabase access token>`.
 
-## Model-key handling
+## SSE contract
 
-The engine trims and normalizes the key it receives (whitespace, a pasted
-`Bearer ` prefix, quotes, embedded newlines) and rejects an empty key with a
-400 *before* opening the stream, so the app can show a real error. Provider
-failures become readable messages: empty key, wrong key, out of credits, rate
-limited, unknown model. A model that rejects `max_tokens` is retried with
-`max_completion_tokens`, then without a limit; older Claude models get a lower
-`max_tokens`.
+`POST /api/projects/:id/chat` streams `data: {json}` frames:
 
-## Why not run opencode here?
+```
+{ type: "ready", runId, provider, model, byok }
+{ type: "delta", text }
+{ type: "tool_start", id, name, arguments }
+{ type: "tool_end", id, name, result, durationMs }
+{ type: "done", text, truncated? }
+{ type: "saved", messageId }
+{ type: "error", message }
+```
 
-You can. `opencode` is a process, and this container is exactly the kind of host
-it needs. If you would rather proxy opencode's own server, add
-`OPENCODE_BIN`/`opencode serve` to the image and replace `/v1/run` with a proxy.
-The Deoid web app only depends on this HTTP contract, so either implementation
-works. The bundled agent exists so the ZIP works with zero extra setup.
+## Files and state
+
+Supabase is the source of truth. `ensureWorkspace()` materialises a project into
+`DATA_DIR/<projectId>/` on first touch and marks it with `.guffy-synced`; every
+tool write goes to disk *and* `project_files`. A Render restart therefore loses
+nothing — the next request rebuilds the directory.
+
+## Security notes
+
+- Shell commands run as the service user. Isolate the instance; do not co-tenant it.
+- The child environment is a whitelist (`PATH`, `HOME`, `LANG`, `LC_ALL`, `TZ`,
+  `NODE_ENV`), so `SUPABASE_SERVICE_ROLE_KEY` and provider keys are never visible
+  to a shell command.
+- Path resolution rejects traversal and writes into `.git` / `node_modules`.
+- Output is capped (reads 200 KB, writes 300 KB, shell 32 KB, 400 files per walk).
+- Previews are signed with HMAC-SHA256(APP_SECRET, projectId) and served
+  `no-store`. Anyone with the signed URL can read the preview; treat it as
+  unlisted, not private.
+
+## Hosting beyond Render
+
+The engine is a plain Node HTTP server with one WebSocket upgrade handler, so
+any container or VM works. Free-ish options, in order of least friction:
+
+| Host | Notes |
+| --- | --- |
+| Render free web service | Sleeps after idle; disk is ephemeral (files re-materialise from Supabase). First request after sleep is slow. |
+| Koyeb free instance | Always-on single instance, ephemeral disk. |
+| Google Cloud Run free tier | Scales to zero; 60-minute request cap is fine for SSE; always-on CPU costs money. |
+| Hugging Face Spaces (Docker) | Free CPU, public by default; add a secret for auth env vars. |
+| Oracle Cloud Always Free ARM VM | Truly free and persistent; run under `pm2` behind Caddy for TLS. |
+| Fly.io | Small always-on machine, needs a card on file. |
+| Home machine + Cloudflare Tunnel | Free and persistent; only as available as your uptime. |
+
+Netlify Functions and Cloudflare Workers are **not** suitable: the engine needs a
+persistent process, child processes for the shell and unbounded SSE streams.

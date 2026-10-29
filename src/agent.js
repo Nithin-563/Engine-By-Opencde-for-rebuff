@@ -1,153 +1,108 @@
-import { callModel } from "./providers.js";
-import { TOOL_SPECS, executeTool } from "./tools.js";
-import { ensureSession, fileTree } from "./sandbox.js";
+import { cfg } from "./config.js";
+import * as store from "./db.js";
+import { TOOL_DEFINITIONS, executeTool } from "./tools.js";
+import { streamChat, UpstreamError } from "./llm.js";
+import { ensureWorkspace, projectDir } from "./workspace.js";
 
-const MAX_STEPS = Math.min(Math.max(Number(process.env.MAX_STEPS) || 12, 1), 30);
+const SYSTEM = `You are Guffy, an autonomous coding agent working inside a browser IDE.
+The user's project files live in a Linux workspace and are mirrored to a database.
 
-export function systemFor(surface) {
-  const common = `You are Deoid, a pragmatic coding agent running inside a real Linux workspace.
-
-You have tools: write_file, read_file, list_files, delete_file, run_command, fetch_url.
 Rules:
-- Work in relative paths. The workspace is persistent for this thread.
-- Inspect before you overwrite. Prefer many small, correct files over one huge file.
-- Use run_command to install dependencies, run tests and verify the build when the task calls for it.
-- Never print API keys, tokens or environment variables.
-- Do not claim something works until you ran it or read the result.
-- When you are done, reply with a short summary: what you built, how to run it, and the file list.`;
+- Use the tools. Never claim you changed a file unless a write_file result confirms it.
+- Read before you edit when the file already exists; then write the complete file.
+- Keep the project runnable in a static preview: index.html at the root, relative asset paths,
+  no server-only imports. If a framework is needed, output built assets instead of a dev server.
+- Prefer small, working increments over large speculative rewrites.
+- run_shell is available for builds and checks. Do not print secrets, and never run
+  interactive commands (no editors, no servers that never exit).
+- When you finish, summarise what changed in one or two sentences. No preamble.`;
 
-  if (surface === "builder") {
-    return `${common}
-
-This is Builder mode. Produce a complete, runnable app in the workspace:
-- package.json plus source files, and a README with run instructions.
-- Run the install/build/test commands that make sense for the stack you chose.
-- Choose the best stack for the request unless the user named one.
-- Finish with the exact commands to run the app locally.`;
-  }
-
-  if (surface === "cowork") {
-    return `${common}
-
-This is Cowork mode. You handle real work end to end: research, documents, scripts,
-data cleanup, small automations. Create the files the user can take away, and say
-where they are.`;
-  }
-
-  return `${common}
-
-This is Chat mode. Answer directly. Use tools only when the user asks for files,
-commands or something you must verify.`;
-}
-
-function cleanMessages(messages) {
-  if (!Array.isArray(messages)) return [];
-  return messages
-    .filter((message) => message && (message.role === "user" || message.role === "assistant"))
-    .filter((message) => typeof message.content === "string" && message.content.trim())
-    .slice(-24)
-    .map((message) => ({ role: message.role, content: message.content }));
-}
-
-/**
- * Runs the tool loop and reports progress through `emit(event, data)`.
- * Returns the final assistant text and the files left in the workspace.
- */
-export async function runAgent({
-  session,
-  surface,
+export async function* runAgent({
+  project,
+  userId,
   provider,
-  model,
   apiKey,
+  extraHeaders,
   baseUrl,
-  messages,
-  emit,
+  model,
+  history,
+  userMessage,
   signal,
+  meta,
 }) {
-  await ensureSession(session);
+  const root = await ensureWorkspace(project);
+  const files = await (await import("./workspace.js")).listWorkspace(project);
+  const manifest = files
+    .slice(0, 120)
+    .map((f) => f.path)
+    .join("\n");
 
-  const conversation = [
-    { role: "system", content: systemFor(surface) },
-    ...cleanMessages(messages),
+  const messages = [
+    { role: "system", content: `${SYSTEM}\n\nWorkspace: ${project.name}\nFiles at start:\n${manifest || "(empty)"}` },
+    ...history.map((m) => ({ role: m.role, content: m.content })),
+    { role: "user", content: userMessage },
   ];
 
-  if (!conversation.some((message) => message.role === "user")) {
-    throw new Error("No user message was provided.");
-  }
+  const ctx = { root: projectDir(project.id), projectId: project.id };
+  let fullText = "";
+  const trace = [];
 
-  let lastText = "";
-  let steps = 0;
+  for (let step = 0; step < cfg.maxSteps; step++) {
+    let stepText = "";
+    const calls = [];
 
-  for (let step = 0; step < MAX_STEPS; step += 1) {
-    steps = step + 1;
-    emit("status", { message: `thinking (step ${steps}/${MAX_STEPS})` });
-
-    const result = await callModel({
-      provider,
+    for await (const event of streamChat({
       baseUrl,
       apiKey,
+      extraHeaders,
       model,
-      messages: conversation,
-      tools: TOOL_SPECS,
+      messages,
+      tools: TOOL_DEFINITIONS,
       signal,
-    });
-
-    if (result.text) lastText = result.text;
-
-    if (!result.toolCalls.length) {
-      return {
-        text: result.text || lastText || "Done.",
-        steps,
-        files: await fileTree(session),
-      };
+    })) {
+      if (event.type === "text") {
+        stepText += event.text;
+        fullText += event.text;
+        yield { type: "delta", text: event.text };
+      } else if (event.type === "usage") {
+        meta.promptTokens += event.promptTokens;
+        meta.completionTokens += event.completionTokens;
+      } else if (event.type === "tool_calls") {
+        calls.push(...event.calls);
+      }
     }
 
-    conversation.push({
+    if (!calls.length) {
+      yield { type: "done", text: fullText };
+      meta.trace = trace;
+      return;
+    }
+
+    messages.push({
       role: "assistant",
-      content: result.text || "",
-      toolCalls: result.toolCalls,
+      content: stepText || null,
+      tool_calls: calls.map((c) => ({ id: c.id, type: "function", function: { name: c.name, arguments: c.arguments || "{}" } })),
     });
 
-    for (const call of result.toolCalls) {
-      emit("status", { message: `${call.name}…` });
-      const outcome = await executeTool(session, call.name, call.args);
-      emit("tool", {
+    for (const call of calls) {
+      yield { type: "tool_start", id: call.id, name: call.name, arguments: call.arguments };
+      const started = Date.now();
+      const result = await executeTool(ctx, call.name, call.arguments);
+      const entry = {
+        id: call.id,
         name: call.name,
-        ok: outcome.ok,
-        summary: outcome.summary,
-      });
-      conversation.push({
-        role: "tool",
-        toolCallId: call.id,
-        toolName: call.name,
-        content: outcome.summary,
-        payload: outcome.payload,
-        ok: outcome.ok,
-      });
+        arguments: call.arguments,
+        result: result.slice(0, 1500),
+        durationMs: Date.now() - started,
+      };
+      trace.push(entry);
+      yield { type: "tool_end", id: call.id, name: call.name, result: entry.result, durationMs: entry.durationMs };
+      messages.push({ role: "tool", tool_call_id: call.id, content: result.slice(0, 24_000) });
     }
   }
 
-  // Hit the step budget: ask for a wrap-up without tools.
-  emit("status", { message: "wrapping up" });
-  const wrap = await callModel({
-    provider,
-    baseUrl,
-    apiKey,
-    model,
-    messages: [
-      ...conversation,
-      {
-        role: "user",
-        content: "Stop using tools. Summarise what you did and how to run it.",
-      },
-    ],
-    tools: [],
-    signal,
-  });
-
-  return {
-    text: wrap.text || lastText || "Stopped after the step limit.",
-    steps,
-    files: await fileTree(session),
-  };
+  meta.trace = trace;
+  yield { type: "done", text: fullText, truncated: true };
 }
+
+export { UpstreamError, store };

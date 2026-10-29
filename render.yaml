@@ -1,17 +1,34 @@
 services:
   - type: web
-    name: deoid-engine
-    runtime: docker
-    dockerfilePath: ./Dockerfile
-    plan: free
+    name: guffy-engine
+    runtime: node
+    plan: starter
+    region: oregon
+    rootDir: .
+    buildCommand: npm ci --omit=dev
+    startCommand: npm start
     healthCheckPath: /health
     autoDeploy: true
     envVars:
-      - key: ENGINE_TOKEN
-        generateValue: true
-      - key: WORKSPACE_ROOT
-        value: /data/workspaces
-      - key: CORS_ORIGIN
+      - key: NODE_VERSION
+        value: 22.11.0
+      - key: SUPABASE_URL
         sync: false
-      - key: MAX_STEPS
-        value: "12"
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: APP_SECRET
+        generateValue: true
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: KILO_API_KEY
+        sync: false
+      - key: WEB_ORIGIN
+        sync: false
+      - key: PUBLIC_URL
+        sync: false
+      - key: ALLOW_SHELL
+        value: "true"
+      - key: MAX_AGENT_STEPS
+        value: "14"

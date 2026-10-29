@@ -1,16 +1,17 @@
 {
-  "name": "deoid-engine",
+  "name": "guffy-engine",
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "The Deoid agent engine: a real workspace, shell and file tools behind one HTTP/SSE endpoint.",
-  "engines": {
-    "node": ">=20"
-  },
+  "description": "Guffy agent engine: provider gateway, tool loop, shell, previews, deploys.",
+  "engines": { "node": ">=20.11" },
   "scripts": {
-    "start": "node src/server.js",
-    "dev": "node --watch src/server.js",
-    "check": "node --check src/server.js && node --check src/agent.js && node --check src/tools.js && node --check src/providers.js && node --check src/sandbox.js",
-    "test": "node scripts/smoke.mjs"
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.4",
+    "express": "^4.21.2",
+    "ws": "^8.18.0"
   }
 }
